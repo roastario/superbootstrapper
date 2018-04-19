@@ -1,10 +1,10 @@
 package net.corda.bootstrapper.nodes
 
 import com.github.dockerjava.core.command.BuildImageResultCallback
-import com.google.common.net.HostAndPort
 import com.typesafe.config.ConfigFactory
 import net.corda.bootstrapper.DockerUtils
 import net.corda.core.identity.CordaX500Name
+import net.corda.core.utilities.NetworkHostAndPort
 import java.io.File
 
 class NodeBuilder {
@@ -19,7 +19,7 @@ class NodeBuilder {
             val nodeConfig = ConfigFactory.parseFile(nodeConfigFile)
             val rpcConfig = nodeConfig.getObject("rpcSettings")
 
-            val rpcHostAndPort = HostAndPort.fromString(rpcConfig["address"]!!.unwrapped().toString())
+            val rpcHostAndPort = NetworkHostAndPort.parse(rpcConfig["address"]!!.unwrapped().toString())
             val x500 = CordaX500Name.parse(nodeConfig.getString("myLegalName"))
 
             println("starting to build docker image for: " + nodeDir)
@@ -36,4 +36,4 @@ class NodeBuilder {
 
 }
 
-data class NodeNetworkConfig(val x500: CordaX500Name, val rpcHostAndPort: HostAndPort)
+data class NodeNetworkConfig(val x500: CordaX500Name, val rpcHostAndPort: NetworkHostAndPort)

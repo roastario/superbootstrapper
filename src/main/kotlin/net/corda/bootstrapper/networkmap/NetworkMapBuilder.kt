@@ -1,5 +1,6 @@
 package net.corda.bootstrapper.networkmap
 
+import net.corda.bootstrapper.Context
 import net.corda.bootstrapper.containers.instance.azure.AzureInstantiator
 import net.corda.bootstrapper.containers.registry.azure.push.ContainerPusher
 import net.corda.bootstrapper.notaries.NotaryFinder
@@ -11,9 +12,9 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 
 
-class NetworkMapBuilder(val networkName: String,
-                        val pusher: ContainerPusher,
-                        val instaniator: AzureInstantiator) {
+class NetworkMapBuilder(val pusher: ContainerPusher,
+                        val instaniator: AzureInstantiator,
+                        val context: Context) {
 
     private val branchName = "off_piste"
     private val networkMapRemoteImageName = "this-is-the-network-map"
@@ -107,8 +108,11 @@ class NetworkMapBuilder(val networkName: String,
         val copiedNotariesNodeInfos = notaryFinder.copyNotariesIntoCacheFolderAndGatherNodeInfos()
         copyNotariesIntoNetworkMap(downloadedNetworkMap, copiedNotariesNodeInfos)
         val localImageName = buildNetworkMap(downloadedNetworkMap);
-        val remoteNetworkMapImageName = pusher.pushContainerToImageRepository(localImageName, networkMapRemoteImageName, networkName)
+        val remoteNetworkMapImageName = pusher.pushContainerToImageRepository(localImageName, networkMapRemoteImageName, context.networkName)
+        context.networkMapLocalImageId = remoteNetworkMapImageName;
         val networkMapFQDN = instaniator.instantiateContainer(remoteNetworkMapImageName, listOf(networkMapPort), "this-is-the-network-map")
-        return "http://$networkMapFQDN:$networkMapPort"
+        val address = "http://$networkMapFQDN:$networkMapPort"
+        context.networkMapAddress = address
+        return address
     }
 }

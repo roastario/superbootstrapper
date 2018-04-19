@@ -1,28 +1,23 @@
 package net.corda.bootstrapper.notaries
 
 import com.github.dockerjava.core.command.BuildImageResultCallback
+import net.corda.bootstrapper.Constants
+import net.corda.bootstrapper.Context
 import net.corda.bootstrapper.DockerUtils
 import net.corda.bootstrapper.containers.instance.azure.AzureInstantiator
 import net.corda.bootstrapper.containers.registry.azure.push.ContainerPusher
 import java.io.File
 
-class NotaryInstantiator(private val networkName: String,
-                         private val pusher: ContainerPusher,
-                         private val instaniator: AzureInstantiator) {
+class NotaryInstantiator(private val pusher: ContainerPusher,
+                         private val instaniator: AzureInstantiator,
+                         private val context: Context) {
 
     private lateinit var finder: NotaryFinder
-    private lateinit var networkMapAddress: String
 
     fun withNotaries(notaryFinder: NotaryFinder): NotaryInstantiator {
         this.finder = notaryFinder
         return this;
     }
-
-    fun withNetworkMapAddress(networkMapAddress: String): NotaryInstantiator {
-        this.networkMapAddress = networkMapAddress
-        return this
-    }
-
 
     fun buildUploadAndInstantiate() {
         val foundNotaries = finder.foundNotaries()
@@ -39,15 +34,16 @@ class NotaryInstantiator(private val networkName: String,
                     .withBaseDirectory(notaryFolder)
                     .exec(BuildImageResultCallback()).awaitImageId()
 
+            val remoteNotaryImageName = pusher.pushContainerToImageRepository(nodeImageId, notaryName, context.networkName)
+            context.notaryRemoteImageIds[notaryName] = remoteNotaryImageName
 
-            val remoteNotaryImageName = pusher.pushContainerToImageRepository(nodeImageId, notaryName, networkName)
             instaniator.instantiateContainer(
                     remoteNotaryImageName,
-                    listOf(10020),
+                    listOf(Constants.NODE_P2P_PORT),
                     notaryName,
-                    mapOf("NETWORK_MAP" to networkMapAddress,
+                    mapOf("NETWORK_MAP" to context.networkMapAddress!!,
                             "OUR_NAME" to expectedFQDN,
-                            "OUR_PORT" to 10020.toString())
+                            "OUR_PORT" to Constants.NODE_P2P_PORT.toString())
             )
         }
     }

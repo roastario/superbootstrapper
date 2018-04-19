@@ -36,12 +36,19 @@ dependencies {
 
     compile "com.microsoft.azure:azure:1.8.0"
     compile "com.github.docker-java:docker-java:3.0.6"
+
+
+
     testCompile "org.jetbrains.kotlin:kotlin-test"
     testCompile "org.jetbrains.kotlin:kotlin-test-junit"
     compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
     compile group: 'net.corda', name: 'corda-node-api', version: corda_release_version
-    compile group: "com.typesafe", name: "config" , version: typesafe_config_version
+    compile group: "com.typesafe", name: "config", version: typesafe_config_version
 
+    compile group: "com.fasterxml.jackson.dataformat", name: "jackson-dataformat-yaml", version: "2.9.0"
+    compile group: "com.fasterxml.jackson.core", name: "jackson-databind", version: "2.9.0"
+    compile "com.fasterxml.jackson.module:jackson-module-kotlin:2.9.+"
+    compile group: 'com.xenomachina', name: 'kotlin-argparser', version: '2.0.6'
 }
 
 compileKotlin {

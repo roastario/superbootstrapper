@@ -3,14 +3,12 @@ package net.corda.bootstrapper.containers.instance.azure
 import com.microsoft.azure.management.Azure
 import com.microsoft.azure.management.containerinstance.ContainerGroupRestartPolicy
 import com.microsoft.azure.management.containerregistry.Registry
-import com.microsoft.azure.management.resources.fluentcore.arm.Region
+import net.corda.bootstrapper.Context
 import net.corda.bootstrapper.containers.registry.azure.create.parseCredentials
 
 class AzureInstantiator(private val azure: Azure,
-                        private val resourceGroupName: String,
-                        private val region: Region,
                         private val registry: Registry,
-                        private val networkName: String
+                        private val context: Context
 ) {
     fun instantiateContainer(imageId: String,
                              portsToOpen: List<Int>,
@@ -20,9 +18,9 @@ class AzureInstantiator(private val azure: Azure,
         println("Starting instantiation of container: $instanceName using $imageId")
         val registryAddress = registry.loginServerUrl()
         val (username, password) = registry.parseCredentials();
-        val containerGroup = azure.containerGroups().define(instanceName + "-" + networkName)
-                .withRegion(region)
-                .withExistingResourceGroup(resourceGroupName)
+        val containerGroup = azure.containerGroups().define(buildIdent(instanceName))
+                .withRegion(context.region)
+                .withNewResourceGroup(context.resourceGroupName)
                 .withLinux()
                 .withPrivateImageRegistry(registryAddress, username, password)
                 .withoutVolume()
@@ -31,7 +29,7 @@ class AzureInstantiator(private val azure: Azure,
                 .withExternalTcpPorts(*portsToOpen.toIntArray())
                 .withEnvironmentVariables(env ?: emptyMap())
                 .attach().withRestartPolicy(ContainerGroupRestartPolicy.ON_FAILURE)
-                .withDnsPrefix("$instanceName-$networkName")
+                .withDnsPrefix(buildIdent(instanceName))
                 .create()
 
         val fqdn = containerGroup.fqdn()
@@ -39,8 +37,19 @@ class AzureInstantiator(private val azure: Azure,
         return fqdn;
     }
 
+    private fun buildIdent(instanceName: String) = "$instanceName-${context.networkName}"
+
     fun getExpectedFQDN(instanceName: String): String {
-        return "$instanceName-$networkName-${region.name()}-azurecontainer.io"
+        return "${buildIdent(instanceName)}.${context.region.name()}.azurecontainer.io"
+    }
+
+    fun isContainerRunning(instanceName: String): Boolean {
+        val containerGroup = azure.containerGroups().getByResourceGroup(context.resourceGroupName, buildIdent(instanceName))
+                ?: return false
+        return containerGroup.containers().filter { (containerName, _) ->
+            containerName == instanceName
+        }.map { (_, second) -> second }
+                .filter { it.instanceView().currentState().state() == "Running" }.isNotEmpty()
     }
 
 }

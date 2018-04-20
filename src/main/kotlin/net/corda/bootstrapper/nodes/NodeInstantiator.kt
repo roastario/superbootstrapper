@@ -12,22 +12,13 @@ class NodeInstantiator(val containerPusher: ContainerPusher,
                        val azureInstantiator: AzureInstantiator,
                        val context: Context) {
 
-    var nodeCount: Map<String, Int> = emptyMap()
 
-    private lateinit var nodeFinder: NodeFinder
-
-    fun withNodes(nodeFinder: NodeFinder): NodeInstantiator {
-        this.nodeFinder = nodeFinder
-        return this;
-    }
-
-
-    fun buildUploadAndInstantiate() {
+    fun buildUploadAndInstantiate(nodeFinder: NodeFinder, nodeCount: Map<String, Int>) {
         val copiedNodeConfigFiles = nodeFinder.copyNodesToCacheFolder()
         val builtDockerNodes = NodeBuilder().buildNodes(copiedNodeConfigFiles)
         val nodesByName = builtDockerNodes.associateBy { (_, nodeDir, _) -> nodeDir.name.toLowerCase() }
 
-        nodesByName.forEach { (nodeName, nodeInfo) ->
+        nodesByName.entries.parallelStream().forEach { (nodeName, nodeInfo) ->
             val (nodeImageId, _, nodeNetworkConfig) = nodeInfo
             val nodeImageName = containerPusher.pushContainerToImageRepository(nodeImageId,
                     "node-$nodeName", context.networkName)
@@ -45,7 +36,7 @@ class NodeInstantiator(val containerPusher: ContainerPusher,
                         nodeInstanceName,
                         mapOf("NETWORK_MAP" to context.networkMapAddress!!,
                                 "OUR_NAME" to expectedFqdn,
-                                "OUR_PORT" to 10020.toString(),
+                                "OUR_PORT" to Constants.NODE_P2P_PORT.toString(),
                                 "X500" to nodeX500)
                 )
             }
@@ -53,30 +44,28 @@ class NodeInstantiator(val containerPusher: ContainerPusher,
 
     }
 
-    fun withNodeCounts(nodeCount: Map<String, Int>): NodeInstantiator {
-        this.nodeCount = nodeCount.map { (nodeName, count) -> nodeName.toLowerCase() to count }.toMap()
-        return this;
-    }
-
-    private fun buildX500(exitingX500: CordaX500Name, i: Int): String {
-        return exitingX500.copy(commonName = (exitingX500.commonName ?: "") + i).toString()
+    private fun buildX500(baseX500: CordaX500Name, i: Int): String {
+        if (i == 0) {
+            return baseX500.toString()
+        }
+        return baseX500.copy(commonName = (baseX500.commonName ?: "") + i).toString()
     }
 
     fun isNodeRunning(nodeInstance: String): Boolean {
         return azureInstantiator.isContainerRunning(nodeInstance)
     }
 
-    fun instantiateNodeInstance(missingNodeInstance: NodeInstanceInfo) {
-        val nodeNetworkConfig = missingNodeInstance.nodeNetworkConfig
-        val imageId = missingNodeInstance.nodeImageId;
+    fun instantiateNodeInstance(nodeInstance: NodeInstanceInfo) {
+        val nodeNetworkConfig = nodeInstance.nodeNetworkConfig
+        val imageId = nodeInstance.nodeImageId
         azureInstantiator.instantiateContainer(
                 imageId,
                 listOf(Constants.NODE_P2P_PORT, nodeNetworkConfig.rpcHostAndPort.port, Constants.NODE_SSHD_PORT),
-                missingNodeInstance.name,
+                nodeInstance.name,
                 mapOf("NETWORK_MAP" to context.networkMapAddress!!,
-                        "OUR_NAME" to azureInstantiator.getExpectedFQDN(missingNodeInstance.name),
+                        "OUR_NAME" to azureInstantiator.getExpectedFQDN(nodeInstance.name),
                         "OUR_PORT" to 10020.toString(),
-                        "X500" to missingNodeInstance.nodeX500)
+                        "X500" to nodeInstance.nodeX500)
         )
 
     }

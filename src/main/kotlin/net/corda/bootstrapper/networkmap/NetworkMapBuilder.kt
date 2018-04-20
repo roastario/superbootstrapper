@@ -6,8 +6,10 @@ import net.corda.bootstrapper.containers.registry.azure.push.ContainerPusher
 import net.corda.bootstrapper.notaries.NotaryFinder
 import net.corda.core.internal.createDirectories
 import java.io.File
+import java.math.BigInteger
 import java.net.URL
 import java.nio.file.Paths
+import java.util.*
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 
@@ -17,19 +19,15 @@ class NetworkMapBuilder(val pusher: ContainerPusher,
                         val context: Context) {
 
     private val branchName = "off_piste"
-    private val networkMapRemoteImageName = "this-is-the-network-map"
+    private val networkMapRemoteImageName = "network-controller"
     private val networkMapPort = 8080
-
-    private lateinit var notaryFinder: NotaryFinder;
-    private lateinit var baseDir: File
-
 
     private fun getNetworkMap(baseDir: File): File {
         val cacheDir = File(baseDir, ".bootstrapper")
         val website = URL("https://github.com/roastario/spring-boot-network-map/archive/$branchName.zip")
         val zippedStream = ZipInputStream(website.openStream())
         zippedStream.use { autoCloseZipStream ->
-            var zipEntry: ZipEntry? = autoCloseZipStream.nextEntry;
+            var zipEntry: ZipEntry? = autoCloseZipStream.nextEntry
             while (zipEntry != null) {
                 val path = Paths.get(cacheDir.toPath().toString(), zipEntry.name)
                 if (!zipEntry.isDirectory) {
@@ -78,41 +76,30 @@ class NetworkMapBuilder(val pusher: ContainerPusher,
             confFile.copyTo(confFileInNotaryDirectory)
             nodeInfo.copyTo(infoFileInNotaryDirectory)
         }
-
         val specialDocker = this.javaClass.classLoader.getResourceAsStream("nm-Dockerfile")
         val oldDocker = File(nmExtractedFolder, "Dockerfile")
-
         specialDocker.use { specialDockerStream ->
             oldDocker.outputStream().use { oldDockerStream ->
                 specialDockerStream.copyTo(oldDockerStream)
             }
         }
-
     }
 
 
-    fun withNotaries(copiedNotariesNodeInfos: NotaryFinder): NetworkMapBuilder {
-        this.notaryFinder = copiedNotariesNodeInfos
-        return this;
-    }
-
-
-    fun withBaseDir(baseDir: File): NetworkMapBuilder {
-        this.baseDir = baseDir;
-        return this
-    }
-
-
-    fun buildUploadAndInstantiate(): String {
+    fun buildUploadAndInstantiate(baseDir: File, notaryFinder: NotaryFinder): String {
         val downloadedNetworkMap = getNetworkMap(baseDir)
         val copiedNotariesNodeInfos = notaryFinder.copyNotariesIntoCacheFolderAndGatherNodeInfos()
         copyNotariesIntoNetworkMap(downloadedNetworkMap, copiedNotariesNodeInfos)
-        val localImageName = buildNetworkMap(downloadedNetworkMap);
+        val localImageName = buildNetworkMap(downloadedNetworkMap)
         val remoteNetworkMapImageName = pusher.pushContainerToImageRepository(localImageName, networkMapRemoteImageName, context.networkName)
-        context.networkMapLocalImageId = remoteNetworkMapImageName;
-        val networkMapFQDN = instaniator.instantiateContainer(remoteNetworkMapImageName, listOf(networkMapPort), "this-is-the-network-map")
+        context.networkMapLocalImageId = remoteNetworkMapImageName
+        val networkMapFQDN = instaniator.instantiateContainer(remoteNetworkMapImageName, listOf(networkMapPort), "nm" + randomSuffix())
         val address = "http://$networkMapFQDN:$networkMapPort"
         context.networkMapAddress = address
         return address
     }
+}
+
+fun randomSuffix(): String {
+    return BigInteger(64, Random()).toString(36)
 }

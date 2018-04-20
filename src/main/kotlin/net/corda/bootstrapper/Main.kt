@@ -21,15 +21,17 @@ import net.corda.bootstrapper.nodes.NodeInstantiator
 import net.corda.bootstrapper.notaries.NotaryFinder
 import net.corda.bootstrapper.notaries.NotaryInstantiator
 import java.io.File
-import java.io.FileFilter
-import java.nio.file.Files
 import java.util.concurrent.CompletableFuture
 
 fun main(args: Array<String>) {
 
     val parsedArgs = ArgParser(args).parseInto(::BootstrapArgParser)
 
-    val baseDir = File("/home/stefano/superbs-scratch/")
+    if (!parsedArgs.validate()) {
+        println("Invalid parameters passed")
+    }
+
+    val baseDir = File(parsedArgs.workingDir)
     val cacheDir = File(baseDir, ".bootstrapper")
 
     val networkName = parsedArgs.name
@@ -39,21 +41,7 @@ fun main(args: Array<String>) {
             .authenticate(AzureCliCredentials.create())
             .withDefaultSubscription()
 
-
-    val objectMapper = ObjectMapper(YAMLFactory()).registerKotlinModule()
-    objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-    objectMapper.registerModule(object : SimpleModule() {}.let {
-        it.addSerializer(Region::class.java, object : JsonSerializer<Region>() {
-            override fun serialize(value: Region, gen: JsonGenerator, serializers: SerializerProvider?) {
-                gen.writeString(value.name())
-            }
-        })
-        it.addDeserializer(Region::class.java, object : JsonDeserializer<Region>() {
-            override fun deserialize(p: JsonParser, ctxt: DeserializationContext): Region {
-                return Region.findByLabelOrName(p.valueAsString)
-            }
-        })
-    })
+    val objectMapper = getContextMapper()
 
     val contextFile = File(cacheDir, "$networkName.yaml")
     var context = contextFile.let {
@@ -71,30 +59,27 @@ fun main(args: Array<String>) {
     val containerPusher = ContainerPusher(azure, registry)
     val azureInstantiator = AzureInstantiator(azure, registry, context)
 
-    if (parsedArgs.new || !context.networkInitiated) {
-        val nodeCount = parseNodeCounts(parsedArgs.nodes, baseDir)
-        println("Constructing new network with name: $networkName with nodes: $nodeCount")
-        context = Context(networkName, Region.EUROPE_WEST)
+    if (parsedArgs.new) {
         if (cacheDir.exists()) cacheDir.deleteRecursively()
         val nodeFinder = NodeFinder(baseDir, cacheDir)
-        val notaryFinder = NotaryFinder(baseDir, cacheDir);
+        val notaryFinder = NotaryFinder(baseDir, cacheDir)
+
+        val nodeCount = parseNodeCounts(nodeFinder, parsedArgs.nodes)
+        println("Constructing new network with name: $networkName with nodes: $nodeCount")
+        context = Context(networkName, Region.EUROPE_WEST)
+
 
         NetworkMapBuilder(containerPusher, azureInstantiator, context)
-                .withBaseDir(baseDir)
-                .withNotaries(notaryFinder)
-                .buildUploadAndInstantiate()
+                .buildUploadAndInstantiate(baseDir, notaryFinder)
 
         val notaryLoadingFuture = CompletableFuture.runAsync({
             NotaryInstantiator(containerPusher, azureInstantiator, context)
-                    .withNotaries(notaryFinder)
-                    .buildUploadAndInstantiate()
+                    .buildUploadAndInstantiate(notaryFinder)
         })
 
         val nodeLoadingFuture = CompletableFuture.runAsync({
             NodeInstantiator(containerPusher, azureInstantiator, context)
-                    .withNodes(nodeFinder)
-                    .withNodeCounts(nodeCount)
-                    .buildUploadAndInstantiate()
+                    .buildUploadAndInstantiate(nodeFinder, nodeCount)
         })
 
         CompletableFuture.allOf(nodeLoadingFuture, notaryLoadingFuture).join()
@@ -102,8 +87,9 @@ fun main(args: Array<String>) {
         persistContext(contextFile, objectMapper, context)
     }
 
-    val b3iNodeName = "b3i"
-    addNode(context, b3iNodeName)
+    parsedArgs.nodesToAdd.forEach {
+        addNode(context, it.toLowerCase())
+    }
 
     NetworkChecker(context, NotaryInstantiator(containerPusher, azureInstantiator, context),
             NodeInstantiator(containerPusher, azureInstantiator, context)).isNetworkHealthy()
@@ -111,24 +97,44 @@ fun main(args: Array<String>) {
     persistContext(contextFile, objectMapper, context)
 }
 
-private fun parseNodeCounts(nodes: List<String>, baseDir: File): Map<String, Int> {
+private fun getContextMapper(): ObjectMapper {
+    val objectMapper = ObjectMapper(YAMLFactory()).registerKotlinModule()
+    objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+    objectMapper.registerModule(object : SimpleModule() {}.let {
+        it.addSerializer(Region::class.java, object : JsonSerializer<Region>() {
+            override fun serialize(value: Region, gen: JsonGenerator, serializers: SerializerProvider?) {
+                gen.writeString(value.name())
+            }
+        })
+        it.addDeserializer(Region::class.java, object : JsonDeserializer<Region>() {
+            override fun deserialize(p: JsonParser, ctxt: DeserializationContext): Region {
+                return Region.findByLabelOrName(p.valueAsString)
+            }
+        })
+    })
+    return objectMapper
+}
 
-    val map = nodes.map {
+private fun parseNodeCounts(nodeFinder: NodeFinder,
+                            nodes: List<String>): Map<String, Int> {
+    val argNodes = nodes.map {
         val split = it.split(":")
-        val nodeName = split[0]
+        val nodeName = split[0].toLowerCase()
         val nodeCount = split[1].toInt()
         nodeName to nodeCount
+    }.toMap(HashMap())
+
+    val dirNodes = nodeFinder.findNodes().map { (_, nodeConfigFile) ->
+        nodeConfigFile.parentFile.name.toLowerCase() to 1
     }.toMap()
 
-    map.forEach {
-        if (!File(baseDir, it.key).exists()) {
-            println("Requested node: ${it.key} but not present in working directory")
-            throw IllegalStateException("Requested node: ${it.key} but not present in working directory")
+    dirNodes.forEach { (name, count) ->
+        if (!argNodes.containsKey(name)) {
+            argNodes[name] = count
         }
     }
 
-    return map;
-
+    return argNodes
 }
 
 private fun persistContext(contextFile: File, objectMapper: ObjectMapper, context: Context?) {
@@ -157,8 +163,18 @@ class BootstrapArgParser(parser: ArgParser) {
     val new by parser.flagging("-n", "--new",
             help = "enable verbose mode").default(true)
 
-    val nodes by parser.adding("-N",
+    val nodes by parser.adding("--node", "-N",
             help = "<nodeName>:<nodeCount> eg NodeOne:2 will result in 2 node instances from folder NodeOne").default { emptyList<String>() }
+
+    val nodesToAdd by parser.adding("--add-node", "-a",
+            help = "node folder to add to network").default { emptyList<String>() }
+
+    val workingDir by parser.storing("--nodes-dir", "-d",
+            help = "nodes directory").default(".")
+
+    fun validate(): Boolean {
+        return (this.new && nodesToAdd.isEmpty() || !this.new && nodesToAdd.isNotEmpty())
+    }
 
 }
 

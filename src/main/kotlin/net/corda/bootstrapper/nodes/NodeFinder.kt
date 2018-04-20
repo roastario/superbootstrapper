@@ -11,22 +11,28 @@ import java.util.stream.Collectors
 
 class NodeFinder(val scratchDir: File, val cacheDir: File) {
 
-    private fun findNodes(): List<Pair<Config, File>> {
-        return FileUtils.listFiles(
-                scratchDir,
-                RegexFileFilter("node.conf"),
-                DirectoryFileFilter.DIRECTORY
-        ).map {
-            try {
-                ConfigFactory.parseFile(it) to it
-            } catch (t: Throwable) {
-                null
+
+    private lateinit var foundNodes: List<Pair<Config, File>>
+
+    fun findNodes(): List<Pair<Config, File>> {
+        if (!::foundNodes.isInitialized) {
+            this.foundNodes = FileUtils.listFiles(
+                    scratchDir,
+                    RegexFileFilter("node.conf"),
+                    DirectoryFileFilter.DIRECTORY
+            ).toSet().map {
+                try {
+                    ConfigFactory.parseFile(it) to it
+                } catch (t: Throwable) {
+                    null
+                }
+            }.filterNotNull()
+                    .filter { !it.first.hasPath("notary") }.map { (nodeConfig, nodeConfigFile) ->
+                println("We've found a node with name: ${nodeConfigFile.parentFile.name}")
+                nodeConfig to nodeConfigFile
             }
-        }.filterNotNull()
-                .filter { !it.first.hasPath("notary") }.map { (nodeConfig, nodeConfigFile) ->
-            println("We've found a node with name: ${nodeConfigFile.parentFile.name}")
-            nodeConfig to nodeConfigFile
         }
+        return foundNodes
     }
 
 

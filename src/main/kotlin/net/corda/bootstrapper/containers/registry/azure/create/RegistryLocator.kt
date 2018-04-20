@@ -11,7 +11,10 @@ class RegistryLocator(private val azure: Azure,
 
     fun getRegistry(): Registry {
 
-        return azure.containerRegistries()
+        val found = azure.containerRegistries().getByResourceGroup(context.resourceGroupName, context.registryName)
+
+
+        return found ?: azure.containerRegistries()
                 .define(context.registryName)
                 .withRegion(context.region)
                 .withNewResourceGroup(context.resourceGroupName)

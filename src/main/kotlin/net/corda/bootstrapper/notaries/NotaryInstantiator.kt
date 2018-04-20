@@ -12,16 +12,10 @@ class NotaryInstantiator(private val pusher: ContainerPusher,
                          private val instaniator: AzureInstantiator,
                          private val context: Context) {
 
-    private lateinit var finder: NotaryFinder
 
-    fun withNotaries(notaryFinder: NotaryFinder): NotaryInstantiator {
-        this.finder = notaryFinder
-        return this;
-    }
-
-    fun buildUploadAndInstantiate() {
+    fun buildUploadAndInstantiate(finder: NotaryFinder) {
         val foundNotaries = finder.foundNotaries()
-        foundNotaries.forEach { (notaryConfigFile, nodeConfigFile) ->
+        foundNotaries.forEach { (notaryConfigFile, _) ->
             val notaryFolder = notaryConfigFile.parentFile
             val notaryName = notaryFolder.name.toLowerCase()
             val expectedFQDN = instaniator.getExpectedFQDN(notaryName)

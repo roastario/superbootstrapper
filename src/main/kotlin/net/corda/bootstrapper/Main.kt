@@ -15,13 +15,13 @@ import com.xenomachina.argparser.default
 import net.corda.bootstrapper.containers.instance.azure.AzureInstantiator
 import net.corda.bootstrapper.containers.registry.azure.create.RegistryLocator
 import net.corda.bootstrapper.containers.registry.azure.push.ContainerPusher
-import net.corda.bootstrapper.networkmap.NetworkMapBuilder
-import net.corda.bootstrapper.nodes.NodeFinder
-import net.corda.bootstrapper.nodes.NodeInstantiator
+import net.corda.bootstrapper.networkmap.AzureNetworkStore
+import net.corda.bootstrapper.nodes.*
 import net.corda.bootstrapper.notaries.NotaryFinder
 import net.corda.bootstrapper.notaries.NotaryInstantiator
 import java.io.File
 import java.util.concurrent.CompletableFuture
+import kotlin.streams.toList
 
 fun main(args: Array<String>) {
 
@@ -55,46 +55,63 @@ fun main(args: Array<String>) {
     }
 
     val registryLocator = RegistryLocator(azure, context)
-    val registry = registryLocator.getRegistry()
-    val containerPusher = ContainerPusher(azure, registry)
-    val azureInstantiator = AzureInstantiator(azure, registry, context)
+    val containerPusher = ContainerPusher(azure, registryLocator.getRegistry())
+    val azureInstantiator = AzureInstantiator(azure, registryLocator.getRegistry(), context)
+    val azureNetworkStore = AzureNetworkStore(azure, context)
 
     if (parsedArgs.new) {
+        context = Context(networkName, Region.EUROPE_WEST)
         if (cacheDir.exists()) cacheDir.deleteRecursively()
         val nodeFinder = NodeFinder(baseDir, cacheDir)
         val notaryFinder = NotaryFinder(baseDir, cacheDir)
-
         val nodeCount = parseNodeCounts(nodeFinder, parsedArgs.nodes)
         println("Constructing new network with name: $networkName with nodes: $nodeCount")
-        context = Context(networkName, Region.EUROPE_WEST)
 
 
-        NetworkMapBuilder(containerPusher, azureInstantiator, context)
-                .buildUploadAndInstantiate(baseDir, notaryFinder)
+        val notaryInstantiator = NotaryInstantiator(containerPusher, azureInstantiator, azureNetworkStore, context)
+        val nodeInstantiator = NodeInstantiator(containerPusher, azureInstantiator, azureNetworkStore, context)
+        val nodeBuilder = NodeBuilder()
+        val nodePusher = NodePusher(containerPusher, context)
+
+
+        val foundNotaries = notaryFinder.foundNotaries()
+        azureNetworkStore.storeNotaryInfo(foundNotaries)
 
         val notaryLoadingFuture = CompletableFuture.runAsync({
-            NotaryInstantiator(containerPusher, azureInstantiator, context)
+            NotaryInstantiator(containerPusher, azureInstantiator, azureNetworkStore, context)
                     .buildUploadAndInstantiate(notaryFinder)
         })
 
-        val nodeLoadingFuture = CompletableFuture.runAsync({
-            NodeInstantiator(containerPusher, azureInstantiator, context)
-                    .buildUploadAndInstantiate(nodeFinder, nodeCount)
-        })
+        val nodeInstances = nodeFinder.foundNodes().parallelStream()
+                .map { foundNode ->
+                    nodeBuilder.buildNode(foundNode)
+                }.map { builtNode ->
+                    nodePusher.pushNode(builtNode)
+                }.map { pushedNode ->
+                    nodeInstantiator.createInstanceRequests(pushedNode, nodeCount)
+                }.toList().flatten().parallelStream()
+                .map {
+                    nodeInstantiator.instantiateNodeInstance(it)
+                    context.registerNode(it)
+                    it
+                }.toList()
 
-        CompletableFuture.allOf(nodeLoadingFuture, notaryLoadingFuture).join()
+
+
+        notaryLoadingFuture.join()
         context.networkInitiated = true
         persistContext(contextFile, objectMapper, context)
+    } else {
+//        val nodeAdder = NodeAdder(context, NodeInstantiator(containerPusher, azureInstantiator, azureNetworkStore, context))
+//        parsedArgs.nodesToAdd.parallelStream().forEach {
+//            nodeAdder.addNode(context, it.toLowerCase())
+//        }
+//        persistContext(contextFile, objectMapper, context)
+
+        val next = context.nodes.entries.iterator().next().value.iterator().next()
+        containerPusher.pushContainerToImageRepository(next.localImageId, "TEST", "testnet")
     }
 
-    parsedArgs.nodesToAdd.forEach {
-        addNode(context, it.toLowerCase())
-    }
-
-    NetworkChecker(context, NotaryInstantiator(containerPusher, azureInstantiator, context),
-            NodeInstantiator(containerPusher, azureInstantiator, context)).isNetworkHealthy()
-
-    persistContext(contextFile, objectMapper, context)
 }
 
 private fun getContextMapper(): ObjectMapper {
@@ -115,6 +132,7 @@ private fun getContextMapper(): ObjectMapper {
     return objectMapper
 }
 
+//TODO - rework so does not cause copy
 private fun parseNodeCounts(nodeFinder: NodeFinder,
                             nodes: List<String>): Map<String, Int> {
     val argNodes = nodes.map {
@@ -123,17 +141,12 @@ private fun parseNodeCounts(nodeFinder: NodeFinder,
         val nodeCount = split[1].toInt()
         nodeName to nodeCount
     }.toMap(HashMap())
-
-    val dirNodes = nodeFinder.findNodes().map { (_, nodeConfigFile) ->
-        nodeConfigFile.parentFile.name.toLowerCase() to 1
-    }.toMap()
-
+    val dirNodes = nodeFinder.foundNodes().map { it.name to 1 }.toMap()
     dirNodes.forEach { (name, count) ->
         if (!argNodes.containsKey(name)) {
             argNodes[name] = count
         }
     }
-
     return argNodes
 }
 
@@ -141,18 +154,6 @@ private fun persistContext(contextFile: File, objectMapper: ObjectMapper, contex
     contextFile.outputStream().use {
         objectMapper.writeValue(it, context)
     }
-}
-
-private fun addNode(context: Context, nodeGroupName: String) {
-    val nodeGroup = context.nodes[nodeGroupName]!!
-    val nodeInfo = nodeGroup.iterator().next()
-    val currentNodeSize = nodeGroup.size
-
-    val nextNodeInfo = nodeInfo.copy(
-            nodeX500 = nodeInfo.nodeNetworkConfig.x500.copy(commonName = nodeInfo.nodeNetworkConfig.x500.commonName + (currentNodeSize)).toString(),
-            name = nodeGroupName + (currentNodeSize)
-    )
-    nodeGroup.add(nextNodeInfo)
 }
 
 class BootstrapArgParser(parser: ArgParser) {

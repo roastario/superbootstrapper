@@ -1,5 +1,6 @@
 package net.corda.bootstrapper.containers.registry.azure.push
 
+import com.github.dockerjava.api.exception.NotFoundException
 import com.github.dockerjava.core.command.PushImageResultCallback
 import com.microsoft.azure.management.Azure
 import com.microsoft.azure.management.containerregistry.Registry
@@ -10,7 +11,7 @@ import net.corda.bootstrapper.containers.registry.azure.create.parseCredentials
 class ContainerPusher(private val azure: Azure, private val azureRegistry: Registry) {
 
 
-    fun pushContainerToImageRepository(localImageName: String,
+    fun pushContainerToImageRepository(localImageId: String,
                                        remoteImageName: String,
                                        networkName: String): String {
 
@@ -22,18 +23,25 @@ class ContainerPusher(private val azure: Azure, private val azureRegistry: Regis
                 registryPassword)
 
 
+        val alreadyExists = try{
+            dockerClient.inspectImageCmd(localImageId).exec()
+            true
+        }catch (e : NotFoundException){
+            false
+        }
         val privateRepoUrl = "${azureRegistry.loginServerUrl()}/$remoteImageName".toLowerCase()
-        dockerClient.tagImageCmd(localImageName, privateRepoUrl, networkName).exec()
+        if (!alreadyExists){
+            dockerClient.tagImageCmd(localImageId, privateRepoUrl, networkName).exec()
 
-        println("starting PUSH image: $localImageName to registryURL: $privateRepoUrl:$networkName")
-        val pushImageCmd = dockerClient.pushImageCmd("$privateRepoUrl:$networkName")
-                .withAuthConfig(dockerClient.authConfig())
-                .exec(PushImageResultCallback())
-                .awaitSuccess()
+            println("starting PUSH image: $localImageId to registryURL: $privateRepoUrl:$networkName")
+            val pushImageCmd = dockerClient.pushImageCmd("$privateRepoUrl:$networkName")
+                    .withAuthConfig(dockerClient.authConfig())
+                    .exec(PushImageResultCallback())
+                    .awaitSuccess()
 
-        println("completed PUSH image: $localImageName to registryURL: $privateRepoUrl:$networkName")
+            println("completed PUSH image: $localImageId to registryURL: $privateRepoUrl:$networkName")
+        }
         return "$privateRepoUrl:$networkName"
-
     }
 
 

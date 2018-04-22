@@ -2,46 +2,23 @@ package net.corda.bootstrapper.nodes
 
 import net.corda.bootstrapper.Constants
 import net.corda.bootstrapper.Context
-import net.corda.bootstrapper.NodeInstanceInfo
 import net.corda.bootstrapper.containers.instance.azure.AzureInstantiator
 import net.corda.bootstrapper.containers.registry.azure.push.ContainerPusher
+import net.corda.bootstrapper.networkmap.AzureNetworkStore
 import net.corda.core.identity.CordaX500Name
-import java.util.stream.IntStream
 
 class NodeInstantiator(val containerPusher: ContainerPusher,
                        val azureInstantiator: AzureInstantiator,
+                       val azureNetworkStore: AzureNetworkStore,
                        val context: Context) {
 
 
-    fun buildUploadAndInstantiate(nodeFinder: NodeFinder, nodeCount: Map<String, Int>) {
-        val copiedNodeConfigFiles = nodeFinder.copyNodesToCacheFolder()
-        val builtDockerNodes = NodeBuilder().buildNodes(copiedNodeConfigFiles)
-        val nodesByName = builtDockerNodes.associateBy { (_, nodeDir, _) -> nodeDir.name.toLowerCase() }
-
-        nodesByName.entries.parallelStream().forEach { (nodeName, nodeInfo) ->
-            val (nodeImageId, _, nodeNetworkConfig) = nodeInfo
-            val nodeImageName = containerPusher.pushContainerToImageRepository(nodeImageId,
-                    "node-$nodeName", context.networkName)
-
-            context.nodeRemoteImageIds[nodeName] = nodeImageName
-
-            IntStream.range(0, nodeCount.getOrDefault(nodeName, 1)).parallel().forEach { i ->
-                val nodeInstanceName = nodeName + i
-                val expectedFqdn = azureInstantiator.getExpectedFQDN(nodeInstanceName)
-                val nodeX500 = buildX500(nodeNetworkConfig.x500, i)
-                context.registerNode(nodeName, nodeInstanceName, nodeImageName, nodeNetworkConfig, nodeX500)
-                azureInstantiator.instantiateContainer(
-                        nodeImageName,
-                        listOf(Constants.NODE_P2P_PORT, nodeNetworkConfig.rpcHostAndPort.port, Constants.NODE_SSHD_PORT),
-                        nodeInstanceName,
-                        mapOf("NETWORK_MAP" to context.networkMapAddress!!,
-                                "OUR_NAME" to expectedFqdn,
-                                "OUR_PORT" to Constants.NODE_P2P_PORT.toString(),
-                                "X500" to nodeX500)
-                )
-            }
+    fun createInstanceRequests(pushedNode: PushedNode, nodeCount: Map<String, Int>): List<NodeInstanceRequest> {
+        return (0..(nodeCount[pushedNode.name] ?: 1)).map { i ->
+            val nodeInstanceName = pushedNode.name + i
+            val expectedName = azureInstantiator.getExpectedFQDN(nodeInstanceName)
+            NodeInstanceRequest(pushedNode, nodeInstanceName, buildX500(pushedNode.x500, i), expectedName)
         }
-
     }
 
     private fun buildX500(baseX500: CordaX500Name, i: Int): String {
@@ -55,19 +32,41 @@ class NodeInstantiator(val containerPusher: ContainerPusher,
         return azureInstantiator.isContainerRunning(nodeInstance)
     }
 
-    fun instantiateNodeInstance(nodeInstance: NodeInstanceInfo) {
-        val nodeNetworkConfig = nodeInstance.nodeNetworkConfig
-        val imageId = nodeInstance.nodeImageId
+    fun instantiateNodeInstance(request: NodeInstanceRequest) {
         azureInstantiator.instantiateContainer(
-                imageId,
-                listOf(Constants.NODE_P2P_PORT, nodeNetworkConfig.rpcHostAndPort.port, Constants.NODE_SSHD_PORT),
-                nodeInstance.name,
-                mapOf("NETWORK_MAP" to context.networkMapAddress!!,
-                        "OUR_NAME" to azureInstantiator.getExpectedFQDN(nodeInstance.name),
-                        "OUR_PORT" to 10020.toString(),
-                        "X500" to nodeInstance.nodeX500)
+                request.remoteImageName,
+                listOf(Constants.NODE_P2P_PORT, request.rpcHostAndPort.port, Constants.NODE_SSHD_PORT),
+                request.nodeInstanceName,
+                mapOf("OUR_NAME" to request.expectedFqName,
+                        "OUR_PORT" to Constants.NODE_P2P_PORT.toString(),
+                        "X500" to request.actualX500),
+                azureNetworkStore
         )
+    }
 
+    fun instantiateNodeInstance(remoteImageName: String,
+                                rpcPort: Int,
+                                nodeInstanceName: String,
+                                expectedFqName: String,
+                                actualX500: String) {
+
+        azureInstantiator.instantiateContainer(
+                remoteImageName,
+                listOf(Constants.NODE_P2P_PORT, rpcPort, Constants.NODE_SSHD_PORT),
+                nodeInstanceName,
+                mapOf("OUR_NAME" to expectedFqName,
+                        "OUR_PORT" to Constants.NODE_P2P_PORT.toString(),
+                        "X500" to actualX500),
+                azureNetworkStore
+        )
+    }
+
+    fun expectedFqdn(newInstanceName: String): String {
+        return azureInstantiator.getExpectedFQDN(newInstanceName)
+    }
+
+    fun instantiateNodeInstance(request: Context.PersistableNodeInstance) {
+        instantiateNodeInstance(request.remoteImageName, request.rpcPort, request.instanceName, request.fqdn, request.instanceX500)
     }
 
 }

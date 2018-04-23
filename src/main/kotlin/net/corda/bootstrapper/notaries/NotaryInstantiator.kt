@@ -6,12 +6,12 @@ import net.corda.bootstrapper.Context
 import net.corda.bootstrapper.DockerUtils
 import net.corda.bootstrapper.containers.instance.azure.AzureInstantiator
 import net.corda.bootstrapper.containers.registry.azure.push.ContainerPusher
-import net.corda.bootstrapper.networkmap.AzureNetworkStore
+import net.corda.bootstrapper.networkmap.AzureSmbVolume
 import java.io.File
 
 class NotaryInstantiator(private val pusher: ContainerPusher,
                          private val instaniator: AzureInstantiator,
-                         private val azureNetworkStore: AzureNetworkStore,
+                         private val azureSmbVolume: AzureSmbVolume,
                          private val context: Context) {
 
 
@@ -39,7 +39,7 @@ class NotaryInstantiator(private val pusher: ContainerPusher,
                     notaryName,
                     mapOf("OUR_NAME" to expectedFQDN,
                             "OUR_PORT" to Constants.NODE_P2P_PORT.toString()),
-                    azureNetworkStore)
+                    azureSmbVolume)
         }
     }
 

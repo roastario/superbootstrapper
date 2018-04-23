@@ -1,6 +1,5 @@
 package net.corda.bootstrapper
 
-import com.fasterxml.jackson.annotation.JsonValue
 import com.microsoft.azure.management.resources.fluentcore.arm.Region
 import net.corda.bootstrapper.nodes.NodeInstanceRequest
 import net.corda.core.identity.CordaX500Name

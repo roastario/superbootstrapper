@@ -5,7 +5,7 @@ import com.microsoft.azure.management.containerinstance.ContainerGroupRestartPol
 import com.microsoft.azure.management.containerregistry.Registry
 import net.corda.bootstrapper.Context
 import net.corda.bootstrapper.containers.registry.azure.create.parseCredentials
-import net.corda.bootstrapper.networkmap.AzureNetworkStore
+import net.corda.bootstrapper.networkmap.AzureSmbVolume
 
 class AzureInstantiator(private val azure: Azure,
                         private val registry: Registry,
@@ -15,7 +15,7 @@ class AzureInstantiator(private val azure: Azure,
                              portsToOpen: List<Int>,
                              instanceName: String,
                              env: Map<String, String>? = null,
-                             azureNetworkStore: AzureNetworkStore): String {
+                             azureSmbVolume: AzureSmbVolume): String {
 
         println("Starting instantiation of container: $instanceName using $imageId")
         val registryAddress = registry.loginServerUrl()
@@ -23,13 +23,13 @@ class AzureInstantiator(private val azure: Azure,
         val mountName = "node-setup"
         val containerGroup = azure.containerGroups().define(buildIdent(instanceName))
                 .withRegion(context.region)
-                .withNewResourceGroup(context.resourceGroupName)
+                .withExistingResourceGroup(context.resourceGroupName)
                 .withLinux()
                 .withPrivateImageRegistry(registryAddress, username, password)
                 .defineVolume(mountName)
-                .withExistingReadWriteAzureFileShare(azureNetworkStore.shareName)
-                .withStorageAccountName(azureNetworkStore.storageAccountName)
-                .withStorageAccountKey(azureNetworkStore.storageAccountKey)
+                .withExistingReadWriteAzureFileShare(azureSmbVolume.shareName)
+                .withStorageAccountName(azureSmbVolume.storageAccountName)
+                .withStorageAccountKey(azureSmbVolume.storageAccountKey)
                 .attach()
                 .defineContainerInstance(instanceName)
                 .withImage(imageId)
@@ -49,15 +49,6 @@ class AzureInstantiator(private val azure: Azure,
 
     fun getExpectedFQDN(instanceName: String): String {
         return "${buildIdent(instanceName)}.${context.region.name()}.azurecontainer.io"
-    }
-
-    fun isContainerRunning(instanceName: String): Boolean {
-        val containerGroup = azure.containerGroups().getByResourceGroup(context.resourceGroupName, buildIdent(instanceName))
-                ?: return false
-        return containerGroup.containers().filter { (containerName, _) ->
-            containerName == instanceName
-        }.map { (_, second) -> second }
-                .filter { it.instanceView().currentState().state() == "Running" }.isNotEmpty()
     }
 
 }

@@ -25,7 +25,7 @@ import java.time.Instant
 import javax.security.auth.x500.X500Principal
 
 
-class AzureNetworkStore(private val azure: Azure, private val context: Context) {
+class AzureSmbVolume(private val azure: Azure, private val context: Context) {
 
     private val storageAccount = getStorageAccount()
 
@@ -42,7 +42,6 @@ class AzureNetworkStore(private val azure: Azure, private val context: Context) 
             .getShareReference("nodeinfos")
 
     val networkParamsFolder = cloudFileShare.rootDirectoryReference.getDirectoryReference("network-params")
-    val nodeInfoFolder = cloudFileShare.rootDirectoryReference.getDirectoryReference("node-infos")
 
     val shareName: String = cloudFileShare.name
     val storageAccountName: String
@@ -56,17 +55,23 @@ class AzureNetworkStore(private val azure: Azure, private val context: Context) 
 
     init {
         SerializationEngine.init()
-        cloudFileShare.createIfNotExists()
-        networkParamsFolder.createIfNotExists()
-        nodeInfoFolder.createIfNotExists()
+        while (true) {
+            try {
+                cloudFileShare.createIfNotExists()
+                networkParamsFolder.createIfNotExists()
+                break
+            } catch (e: Throwable) {
+                println("storage account not ready, waiting")
+                Thread.sleep(5000)
+            }
+        }
     }
 
     private fun getStorageAccount(): StorageAccount {
-
         return azure.storageAccounts().getByResourceGroup(context.resourceGroupName, context.storageAccountName)
                 ?: azure.storageAccounts().define(context.storageAccountName)
                         .withRegion(context.region)
-                        .withNewResourceGroup(context.resourceGroupName).withAccessFromAllNetworks()
+                        .withExistingResourceGroup(context.resourceGroupName).withAccessFromAllNetworks()
                         .create()
     }
 

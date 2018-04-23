@@ -6,16 +6,14 @@ import com.fasterxml.jackson.databind.*
 import com.fasterxml.jackson.databind.module.SimpleModule
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import com.microsoft.azure.credentials.AzureCliCredentials
-import com.microsoft.azure.management.Azure
+import com.microsoft.azure.CloudException
 import com.microsoft.azure.management.resources.fluentcore.arm.Region
-import com.microsoft.rest.LogLevel
 import com.xenomachina.argparser.ArgParser
 import com.xenomachina.argparser.default
 import net.corda.bootstrapper.containers.instance.azure.AzureInstantiator
 import net.corda.bootstrapper.containers.registry.azure.create.RegistryLocator
 import net.corda.bootstrapper.containers.registry.azure.push.ContainerPusher
-import net.corda.bootstrapper.networkmap.AzureNetworkStore
+import net.corda.bootstrapper.networkmap.AzureSmbVolume
 import net.corda.bootstrapper.nodes.*
 import net.corda.bootstrapper.notaries.NotaryFinder
 import net.corda.bootstrapper.notaries.NotaryInstantiator
@@ -36,10 +34,6 @@ fun main(args: Array<String>) {
 
     val networkName = parsedArgs.name
 
-    val azure = Azure.configure()
-            .withLogLevel(LogLevel.BASIC)
-            .authenticate(AzureCliCredentials.create())
-            .withDefaultSubscription()
 
     val objectMapper = getContextMapper()
 
@@ -54,31 +48,28 @@ fun main(args: Array<String>) {
         }
     }
 
-    val registryLocator = RegistryLocator(azure, context)
-    val containerPusher = ContainerPusher(azure, registryLocator.getRegistry())
-    val azureInstantiator = AzureInstantiator(azure, registryLocator.getRegistry(), context)
-    val azureNetworkStore = AzureNetworkStore(azure, context)
+
 
     if (parsedArgs.new) {
         context = Context(networkName, Region.EUROPE_WEST)
+
+        val (containerPusher, instantiator, volume) = AzureContext.fromContext(context)
+
         if (cacheDir.exists()) cacheDir.deleteRecursively()
         val nodeFinder = NodeFinder(baseDir, cacheDir)
         val notaryFinder = NotaryFinder(baseDir, cacheDir)
         val nodeCount = parseNodeCounts(nodeFinder, parsedArgs.nodes)
         println("Constructing new network with name: $networkName with nodes: $nodeCount")
 
-
-        val notaryInstantiator = NotaryInstantiator(containerPusher, azureInstantiator, azureNetworkStore, context)
-        val nodeInstantiator = NodeInstantiator(containerPusher, azureInstantiator, azureNetworkStore, context)
+        val nodeInstantiator = NodeInstantiator(instantiator, volume, context)
         val nodeBuilder = NodeBuilder()
         val nodePusher = NodePusher(containerPusher, context)
 
-
         val foundNotaries = notaryFinder.foundNotaries()
-        azureNetworkStore.storeNotaryInfo(foundNotaries)
+        volume.storeNotaryInfo(foundNotaries)
 
         val notaryLoadingFuture = CompletableFuture.runAsync({
-            NotaryInstantiator(containerPusher, azureInstantiator, azureNetworkStore, context)
+            NotaryInstantiator(containerPusher, instantiator, volume, context)
                     .buildUploadAndInstantiate(notaryFinder)
         })
 
@@ -102,14 +93,12 @@ fun main(args: Array<String>) {
         context.networkInitiated = true
         persistContext(contextFile, objectMapper, context)
     } else {
-//        val nodeAdder = NodeAdder(context, NodeInstantiator(containerPusher, azureInstantiator, azureNetworkStore, context))
-//        parsedArgs.nodesToAdd.parallelStream().forEach {
-//            nodeAdder.addNode(context, it.toLowerCase())
-//        }
-//        persistContext(contextFile, objectMapper, context)
-
-        val next = context.nodes.entries.iterator().next().value.iterator().next()
-        containerPusher.pushContainerToImageRepository(next.localImageId, "TEST", "testnet")
+        val (_, instantiator, volume) = AzureContext.fromContext(context)
+        val nodeAdder = NodeAdder(context, NodeInstantiator(instantiator, volume, context))
+        parsedArgs.nodesToAdd.parallelStream().forEach {
+            nodeAdder.addNode(context, it.toLowerCase())
+        }
+        persistContext(contextFile, objectMapper, context)
     }
 
 }

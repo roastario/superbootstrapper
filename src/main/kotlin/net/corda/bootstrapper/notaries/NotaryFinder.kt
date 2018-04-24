@@ -50,7 +50,11 @@ class NotaryFinder(val dirToSearch: File, val cacheDir: File) {
             val notaryNodeInfo = FileUtils.listFiles(
                     workingDirectory.toFile(),
                     RegexFileFilter("nodeInfo-.*"),
-                    DirectoryFileFilter.DIRECTORY
+                    object : DirectoryFileFilter(){
+                        override fun accept(file: File): Boolean {
+                            return !file.isDirectory
+                        }
+                    }
             ).single()
             val nodeInfo = notaryNodeInfo.toPath().readObject<SignedNodeInfo>().verified()
             println("OK - notary has legal identity: ${nodeInfo.legalIdentities.first()}")

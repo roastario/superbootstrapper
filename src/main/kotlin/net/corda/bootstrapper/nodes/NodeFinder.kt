@@ -47,7 +47,8 @@ class NodeFinder(private val scratchDir: File, private val cacheDir: File) {
                 val configInCacheDir = File(nodeCacheDir, "node.conf")
                 println("Applying precanned config " + configInCacheDir)
                 val rpcSettings = getDefaultRpcSettings()
-                mergeConfigs(configInCacheDir, rpcSettings)
+                val sshSettings = getDefaultSshSettings();
+                mergeConfigs(configInCacheDir, rpcSettings, sshSettings)
                 val credentials = getCredentials(configInCacheDir)
                 return@map FoundNode(configInCacheDir, credentials)
             }.collect(Collectors.toList())
@@ -94,11 +95,21 @@ class NodeFinder(private val scratchDir: File, private val cacheDir: File) {
         }.getValue("rpcSettings")
     }
 
-    private fun mergeConfigs(configInCacheDir: File, rpcSettings: ConfigValue) {
+    private fun getDefaultSshSettings(): ConfigValue {
+        return javaClass
+                .classLoader
+                .getResourceAsStream("ssh.conf")
+                .reader().use {
+            ConfigFactory.parseReader(it)
+        }.getValue("sshd")
+    }
+
+    private fun mergeConfigs(configInCacheDir: File, rpcSettings: ConfigValue, sshSettings: ConfigValue) {
         val trimmedConfig = ConfigFactory.parseFile(configInCacheDir)
                 .withoutPath("compatibilityZoneURL")
                 .withoutPath("p2pAddress")
                 .withValue("rpcSettings", rpcSettings)
+                .withValue("sshd", sshSettings)
 
         configInCacheDir.outputStream().use {
             trimmedConfig.root().render(ConfigRenderOptions
